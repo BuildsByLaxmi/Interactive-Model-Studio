@@ -1195,6 +1195,9 @@ body {
 
 @media (min-width: 1024px) {
   .lg\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .lg\:grid-cols-12 { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .lg\:col-span-5 { grid-column: span 5 / span 5; }
+  .lg\:col-span-7 { grid-column: span 7 / span 7; }
   .min-w-\[280px\] { min-width: 280px; }
 =======
   background-color: var(--bg-dark);
@@ -1726,3 +1729,274 @@ body {
   margin-bottom: 8px;
 >>>>>>> c50f521 (feat: complete end-to-end ML Engine, Backend REST APIs, and React Frontend UI)
 }
+
+/* ===================================
+   CHAINED DATA CLEANING & TRANSFORMS
+   =================================== */
+
+.chain-tabs-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background-color: #f8fafc;
+  padding: 0.5rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+
+.chain-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.25rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: white;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.chain-tab-btn:hover {
+  color: var(--text-main);
+  border-color: #cbd5e1;
+}
+
+.chain-tab-btn.active {
+  background-color: #ffffff;
+  color: var(--primary);
+  border-color: var(--primary);
+  box-shadow: 0 2px 4px rgba(79, 70, 229, 0.08);
+}
+
+.chain-step-badge {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background-color: #e2e8f0;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.chain-tab-btn.active .chain-step-badge {
+  background-color: var(--primary);
+  color: white;
+}
+
+.tab-pill-count {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+  background-color: #f1f5f9;
+  color: var(--text-muted);
+}
+
+.chain-tab-divider {
+  color: #94a3b8;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+/* ===================================
+   VISUAL PIPELINE DAG CANVAS
+   =================================== */
+
+.pipeline-canvas-container {
+  background-color: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1.25rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.pipeline-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background-color: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+  padding: 0.25rem 0.65rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.canvas-flow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding: 1rem 0.5rem;
+}
+
+.canvas-node {
+  min-width: 200px;
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.85rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.canvas-node:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.06);
+}
+
+.node-icon-wrapper {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.node-content {
+  flex: 1;
+}
+
+.node-stage-tag {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #e2e8f0;
+  color: #475569;
+  margin-bottom: 0.25rem;
+}
+
+.node-stage-tag.stage-clean { background-color: #dbeafe; color: #1e40af; }
+.node-stage-tag.stage-trans { background-color: #ede9fe; color: #6d28d9; }
+.node-stage-tag.stage-model { background-color: #d1fae5; color: #065f46; }
+.node-stage-tag.stage-eval  { background-color: #fef3c7; color: #92400e; }
+
+.node-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0 0 0.25rem 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-stats {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.node-mini-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.canvas-arrow {
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.canvas-algo-select {
+  font-size: 0.8rem;
+  font-weight: 700;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0.25rem 0.45rem;
+  background: white;
+  color: #1e293b;
+  width: 100%;
+  margin-bottom: 0.25rem;
+}
+
+/* ===================================
+   CODEGEN & BLUEPRINT
+   =================================== */
+
+.pipeline-blueprint-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  font-size: 0.8rem;
+}
+
+.pipeline-blueprint-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.blueprint-bullet {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 0.35rem;
+  flex-shrink: 0;
+}
+
+.codegen-container {
+  background: #ffffff;
+  border-radius: 12px;
+}
+
+.codegen-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: white;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.codegen-tab-btn.active {
+  background-color: #0f172a;
+  color: #38bdf8;
+  border-color: #0f172a;
+}
+
+.codegen-editor-wrapper {
+  background-color: #0f172a;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.codegen-code-box {
+  color: #f1f5f9;
+  padding: 1.25rem;
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  max-height: 520px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
