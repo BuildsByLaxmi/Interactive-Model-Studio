@@ -11,7 +11,12 @@ import {
   RotateCcw,
   Sparkles,
   HelpCircle,
-  Trash2
+  Trash2,
+  Brush,
+  Zap,
+  Layers,
+  ShieldAlert,
+  Percent
 } from "lucide-react";
 import api from "../api/client";
 import { getMockDatasetById, mockDatasets } from "../api/mockData";
@@ -27,12 +32,15 @@ export default function Preprocessing() {
   const [testSize, setTestSize] = useState(0.2);
   const [randomState, setRandomState] = useState(42);
   const [copied, setCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState("cleaning"); // "cleaning" | "transform"
 
-  // Column configurations: { [colName]: { action: 'keep'|'drop', imputer: string, transform: string } }
-  const [columnConfigs, setColumnConfigs] = useState({});
+  // Stage 1: Data Cleaning Configs per column: { action: 'keep'|'drop', imputer: string, handleOutliers: boolean }
+  const [cleaningConfigs, setCleaningConfigs] = useState({});
+
+  // Stage 2: Feature Transformation Configs per column: { mathTransform: string, scaler: string, encoder: string, binning: string }
+  const [transformConfigs, setTransformConfigs] = useState({});
 
   useEffect(() => {
-    // Fetch dataset or load mock
     api.getDatasets()
       .then((data) => {
         const found = Array.isArray(data) ? data.find((d) => d.id === datasetId) : null;
@@ -48,135 +56,149 @@ export default function Preprocessing() {
     const target = initialTarget || data.target_column || data.schema[data.schema.length - 1]?.name;
     setTargetColumn(target);
 
-    // Initialize default configs based on inferred column types
-    const initial = {};
+    const initialCleaning = {};
+    const initialTransform = {};
+
     (data.schema || []).forEach((col) => {
       if (col.name === target) return;
 
       const isNumeric = col.type === "numerical";
       const isIdOrProxy = col.name.toLowerCase().includes("id") || col.name.toLowerCase().includes("proxy");
 
-      initial[col.name] = {
+      // Stage 1: Cleaning defaults
+      initialCleaning[col.name] = {
         action: isIdOrProxy ? "drop" : "keep",
         imputer: isNumeric ? (col.null_pct > 0 ? "median" : "none") : (col.null_pct > 0 ? "most_frequent" : "none"),
-        transform: isNumeric ? "StandardScaler" : "OneHotEncoder",
+        handleOutliers: isNumeric && col.name.toLowerCase().includes("charge"),
+      };
+
+      // Stage 2: Transformation defaults
+      initialTransform[col.name] = {
+        type: col.type,
+        mathTransform: isNumeric && col.name.toLowerCase().includes("charge") ? "log1p" : "none",
+        scaler: isNumeric ? "StandardScaler" : "none",
+        encoder: !isNumeric ? "OneHotEncoder" : "none",
+        binning: "none",
       };
     });
-    setColumnConfigs(initial);
+
+    setCleaningConfigs(initialCleaning);
+    setTransformConfigs(initialTransform);
   };
 
-  const updateColConfig = (colName, key, value) => {
-    setColumnConfigs((prev) => ({
+  const updateCleaning = (colName, key, value) => {
+    setCleaningConfigs((prev) => ({
       ...prev,
-      [colName]: {
-        ...prev[colName],
-        [key]: value,
-      },
+      [colName]: { ...prev[colName], [key]: value },
+    }));
+  };
+
+  const updateTransform = (colName, key, value) => {
+    setTransformConfigs((prev) => ({
+      ...prev,
+      [colName]: { ...prev[colName], [key]: value },
     }));
   };
 
   const applyPreset = (presetName) => {
     if (!dataset) return;
-    const updated = {};
+    const newCleaning = {};
+    const newTransform = {};
+
     dataset.schema.forEach((col) => {
       if (col.name === targetColumn) return;
       const isNumeric = col.type === "numerical";
-      const isIdOrProxy = col.name.toLowerCase().includes("id") || col.name.toLowerCase().includes("proxy");
+      const isId = col.name.toLowerCase().includes("id");
 
       if (presetName === "recommended") {
-        updated[col.name] = {
-          action: isIdOrProxy ? "drop" : "keep",
+        newCleaning[col.name] = {
+          action: isId ? "drop" : "keep",
           imputer: isNumeric ? "median" : "most_frequent",
-          transform: isNumeric ? "StandardScaler" : (col.cardinality > 20 ? "OrdinalEncoder" : "OneHotEncoder"),
+          handleOutliers: isNumeric,
         };
-      } else if (presetName === "minimal") {
-        updated[col.name] = {
-          action: "keep",
-          imputer: isNumeric ? "mean" : "most_frequent",
-          transform: isNumeric ? "none" : "OneHotEncoder",
+        newTransform[col.name] = {
+          type: col.type,
+          mathTransform: isNumeric && (col.name.toLowerCase().includes("charge") || col.name.toLowerCase().includes("price")) ? "log1p" : "none",
+          scaler: isNumeric ? "StandardScaler" : "none",
+          encoder: !isNumeric ? (col.cardinality > 10 ? "OrdinalEncoder" : "OneHotEncoder") : "none",
+          binning: "none",
         };
       } else {
-        updated[col.name] = {
-          action: "keep",
-          imputer: "none",
-          transform: "none",
-        };
+        newCleaning[col.name] = { action: "keep", imputer: "none", handleOutliers: false };
+        newTransform[col.name] = { type: col.type, mathTransform: "none", scaler: "none", encoder: "none", binning: "none" };
       }
     });
-    setColumnConfigs(updated);
+
+    setCleaningConfigs(newCleaning);
+    setTransformConfigs(newTransform);
   };
 
-  // Generate recipe JSON matching Person B's pipeline step schema
+  // Structured chained recipe JSON
   const generateRecipeJson = () => {
-    const dropCols = [];
-    const imputeGroups = {};
-    const scaleGroups = {};
-    const encodeGroups = {};
+    const droppedCols = [];
+    const imputeSteps = {};
+    const outlierCols = [];
+    const mathSteps = {};
+    const scaleSteps = {};
+    const encodeSteps = {};
+    const binSteps = {};
 
-    Object.entries(columnConfigs).forEach(([colName, cfg]) => {
+    // 1. Cleaning steps
+    Object.entries(cleaningConfigs).forEach(([col, cfg]) => {
       if (cfg.action === "drop") {
-        dropCols.push(colName);
+        droppedCols.push(col);
         return;
       }
-
       if (cfg.imputer && cfg.imputer !== "none") {
-        if (!imputeGroups[cfg.imputer]) imputeGroups[cfg.imputer] = [];
-        imputeGroups[cfg.imputer].push(colName);
+        if (!imputeSteps[cfg.imputer]) imputeSteps[cfg.imputer] = [];
+        imputeSteps[cfg.imputer].push(col);
       }
-
-      if (cfg.transform && cfg.transform !== "none") {
-        if (cfg.transform.includes("Scaler")) {
-          if (!scaleGroups[cfg.transform]) scaleGroups[cfg.transform] = [];
-          scaleGroups[cfg.transform].push(colName);
-        } else if (cfg.transform.includes("Encoder")) {
-          if (!encodeGroups[cfg.transform]) encodeGroups[cfg.transform] = [];
-          encodeGroups[cfg.transform].push(colName);
-        }
+      if (cfg.handleOutliers) {
+        outlierCols.push(col);
       }
     });
 
-    const steps = [];
+    // 2. Transformation steps
+    Object.entries(transformConfigs).forEach(([col, cfg]) => {
+      if (cleaningConfigs[col]?.action === "drop") return;
 
-    // Drop step
-    if (dropCols.length > 0) {
-      steps.push({
-        step: "drop_columns",
-        params: { columns: dropCols },
-      });
-    }
-
-    // Impute steps
-    Object.entries(imputeGroups).forEach(([strategy, cols]) => {
-      steps.push({
-        step: "impute",
-        params: { strategy, columns: cols },
-      });
+      if (cfg.mathTransform && cfg.mathTransform !== "none") {
+        if (!mathSteps[cfg.mathTransform]) mathSteps[cfg.mathTransform] = [];
+        mathSteps[cfg.mathTransform].push(col);
+      }
+      if (cfg.scaler && cfg.scaler !== "none") {
+        if (!scaleSteps[cfg.scaler]) scaleSteps[cfg.scaler] = [];
+        scaleSteps[cfg.scaler].push(col);
+      }
+      if (cfg.encoder && cfg.encoder !== "none") {
+        if (!encodeSteps[cfg.encoder]) encodeSteps[cfg.encoder] = [];
+        encodeSteps[cfg.encoder].push(col);
+      }
+      if (cfg.binning && cfg.binning !== "none") {
+        if (!binSteps[cfg.binning]) binSteps[cfg.binning] = [];
+        binSteps[cfg.binning].push(col);
+      }
     });
 
-    // Scale steps
-    Object.entries(scaleGroups).forEach(([method, cols]) => {
-      steps.push({
-        step: "scale",
-        params: { method, columns: cols },
-      });
-    });
+    const cleaning_chain = [];
+    if (droppedCols.length > 0) cleaning_chain.push({ step: "drop_columns", columns: droppedCols });
+    Object.entries(imputeSteps).forEach(([strategy, cols]) => cleaning_chain.push({ step: "impute", strategy, columns: cols }));
+    if (outlierCols.length > 0) cleaning_chain.push({ step: "iqr_outlier_clipping", columns: outlierCols, threshold: 1.5 });
 
-    // Encode steps
-    Object.entries(encodeGroups).forEach(([method, cols]) => {
-      steps.push({
-        step: "encode",
-        params: { method, columns: cols },
-      });
-    });
+    const transformation_chain = [];
+    Object.entries(mathSteps).forEach(([method, cols]) => transformation_chain.push({ step: "math_transform", method, columns: cols }));
+    Object.entries(encodeSteps).forEach(([encoder, cols]) => transformation_chain.push({ step: "encode", method: encoder, columns: cols }));
+    Object.entries(scaleSteps).forEach(([scaler, cols]) => transformation_chain.push({ step: "scale", method: scaler, columns: cols }));
+    Object.entries(binSteps).forEach(([bins, cols]) => transformation_chain.push({ step: "binning", bins, columns: cols }));
 
     return {
       dataset_id: dataset?.id || datasetId,
       target_column: targetColumn,
-      split: {
-        test_size: Number(testSize),
-        random_state: Number(randomState),
-      },
-      steps,
+      split: { test_size: Number(testSize), random_state: Number(randomState) },
+      chains: {
+        stage_1_cleaning: cleaning_chain,
+        stage_2_transformation: transformation_chain,
+      }
     };
   };
 
@@ -197,6 +219,8 @@ export default function Preprocessing() {
     );
   }
 
+  const eligibleCols = dataset.schema.filter((col) => col.name !== targetColumn);
+
   return (
     <div className="page-container">
       {/* Header */}
@@ -207,9 +231,9 @@ export default function Preprocessing() {
               <ArrowLeft size={15} /> Back to Schema
             </Link>
           </div>
-          <h1 className="page-title">Preprocessing Recipe Builder</h1>
+          <h1 className="page-title">Chained Data Cleaning & Feature Transformation</h1>
           <p className="page-subtitle">
-            Configure reproducible data cleaning, imputations, feature scalers, and train/test splits. Outputs standard schema for the ML engine.
+            Configure data preparation in two sequential stages: <strong>Stage 1: Cleaning</strong> (impute nulls & handle outliers) followed by <strong>Stage 2: Transformation</strong> (power transforms, encoding & scaling).
           </p>
         </div>
 
@@ -219,7 +243,7 @@ export default function Preprocessing() {
             onClick={() => applyPreset("recommended")}
           >
             <Wand2 size={15} className="text-primary" />
-            <span>Auto-Clean Preset</span>
+            <span>Auto-Recommend Recipe</span>
           </button>
           <button 
             className="btn btn-secondary flex items-center gap-1.5"
@@ -280,27 +304,66 @@ export default function Preprocessing() {
         </div>
       </div>
 
-      {/* Main Grid: Transformations Table + Real-Time JSON Preview */}
+      {/* Chained Stages Navigation Bar */}
+      <div className="chain-tabs-nav mb-4">
+        <button 
+          className={`chain-tab-btn ${activeTab === "cleaning" ? "active" : ""}`}
+          onClick={() => setActiveTab("cleaning")}
+        >
+          <div className="chain-step-badge">1</div>
+          <Brush size={16} />
+          <span>Stage 1: Data Cleaning Chain</span>
+          <span className="tab-pill-count">
+            {recipe.chains.stage_1_cleaning.length} steps
+          </span>
+        </button>
+
+        <div className="chain-tab-divider">➔</div>
+
+        <button 
+          className={`chain-tab-btn ${activeTab === "transform" ? "active" : ""}`}
+          onClick={() => setActiveTab("transform")}
+        >
+          <div className="chain-step-badge">2</div>
+          <Zap size={16} />
+          <span>Stage 2: Feature Transformation Chain</span>
+          <span className="tab-pill-count">
+            {recipe.chains.stage_2_transformation.length} steps
+          </span>
+        </button>
+      </div>
+
+      {/* Main Grid: Chained Controls Table + Real-Time JSON Preview */}
       <div className="recipe-grid">
-        {/* Transformations Table */}
-        <div className="studio-card">
-          <h2 className="card-heading mb-3">Feature Transformations</h2>
-          <div className="table-responsive">
-            <table className="studio-table">
-              <thead>
-                <tr>
-                  <th>Feature</th>
-                  <th>Type</th>
-                  <th>Action</th>
-                  <th>Missing Imputer</th>
-                  <th>Scaling / Encoding</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dataset.schema
-                  .filter((col) => col.name !== targetColumn)
-                  .map((col) => {
-                    const cfg = columnConfigs[col.name] || { action: "keep", imputer: "none", transform: "none" };
+        {/* Stage 1: Data Cleaning Chain View */}
+        {activeTab === "cleaning" && (
+          <div className="studio-card">
+            <div className="flex justify-between items-center mb-3">
+              <div>
+                <h2 className="card-heading flex items-center gap-2">
+                  <Brush size={18} className="text-primary" />
+                  Stage 1: Data Cleaning Chain
+                </h2>
+                <p className="text-xs text-muted">
+                  Remove proxy/ID columns, impute missing values, and handle extreme outliers.
+                </p>
+              </div>
+            </div>
+
+            <div className="table-responsive">
+              <table className="studio-table">
+                <thead>
+                  <tr>
+                    <th>Feature</th>
+                    <th>Type</th>
+                    <th>Action</th>
+                    <th>Missing Imputer</th>
+                    <th>Outlier Handling (IQR)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eligibleCols.map((col) => {
+                    const cfg = cleaningConfigs[col.name] || { action: "keep", imputer: "none", handleOutliers: false };
                     const isNumeric = col.type === "numerical";
                     const isDropped = cfg.action === "drop";
 
@@ -320,7 +383,7 @@ export default function Preprocessing() {
                         <td>
                           <button
                             className={`btn-action-drop ${isDropped ? "dropped" : ""}`}
-                            onClick={() => updateColConfig(col.name, "action", isDropped ? "keep" : "drop")}
+                            onClick={() => updateCleaning(col.name, "action", isDropped ? "keep" : "drop")}
                             title={isDropped ? "Restore feature" : "Drop feature"}
                           >
                             {isDropped ? "Dropped" : "Keep"}
@@ -332,7 +395,7 @@ export default function Preprocessing() {
                           ) : isNumeric ? (
                             <select
                               value={cfg.imputer}
-                              onChange={(e) => updateColConfig(col.name, "imputer", e.target.value)}
+                              onChange={(e) => updateCleaning(col.name, "imputer", e.target.value)}
                               className="form-select-sm"
                             >
                               <option value="none">None (No Nulls)</option>
@@ -343,7 +406,7 @@ export default function Preprocessing() {
                           ) : (
                             <select
                               value={cfg.imputer}
-                              onChange={(e) => updateColConfig(col.name, "imputer", e.target.value)}
+                              onChange={(e) => updateCleaning(col.name, "imputer", e.target.value)}
                               className="form-select-sm"
                             >
                               <option value="none">None (No Nulls)</option>
@@ -353,26 +416,112 @@ export default function Preprocessing() {
                           )}
                         </td>
                         <td>
-                          {isDropped ? (
+                          {isDropped || !isNumeric ? (
+                            <span className="text-muted text-xs">N/A</span>
+                          ) : (
+                            <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold">
+                              <input 
+                                type="checkbox"
+                                checked={cfg.handleOutliers || false}
+                                onChange={(e) => updateCleaning(col.name, "handleOutliers", e.target.checked)}
+                                className="accent-indigo-600 rounded"
+                              />
+                              <span>1.5× IQR Clip</span>
+                            </label>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Stage 2: Feature Transformation Chain View */}
+        {activeTab === "transform" && (
+          <div className="studio-card">
+            <div className="flex justify-between items-center mb-3">
+              <div>
+                <h2 className="card-heading flex items-center gap-2">
+                  <Zap size={18} className="text-accent" />
+                  Stage 2: Feature Transformation Chain
+                </h2>
+                <p className="text-xs text-muted">
+                  Apply mathematical power transforms, categorical encoders, and feature scalers.
+                </p>
+              </div>
+            </div>
+
+            <div className="table-responsive">
+              <table className="studio-table">
+                <thead>
+                  <tr>
+                    <th>Feature</th>
+                    <th>Type</th>
+                    <th>Math / Power Transform</th>
+                    <th>Scaling Method</th>
+                    <th>Categorical Encoding</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eligibleCols.map((col) => {
+                    const isDropped = cleaningConfigs[col.name]?.action === "drop";
+                    const cfg = transformConfigs[col.name] || { mathTransform: "none", scaler: "none", encoder: "none" };
+                    const isNumeric = col.type === "numerical";
+
+                    return (
+                      <tr key={col.name} className={isDropped ? "opacity-50" : ""}>
+                        <td>
+                          <strong>{col.name}</strong>
+                          {isDropped && <span className="text-xs block text-danger">(Dropped in Stage 1)</span>}
+                        </td>
+                        <td>
+                          <span className={`type-tag type-${col.type}`}>{col.type}</span>
+                        </td>
+                        <td>
+                          {isDropped || !isNumeric ? (
                             <span className="text-muted text-xs">—</span>
-                          ) : isNumeric ? (
-                            <select
-                              value={cfg.transform}
-                              onChange={(e) => updateColConfig(col.name, "transform", e.target.value)}
-                              className="form-select-sm"
-                            >
-                              <option value="none">None (Raw)</option>
-                              <option value="StandardScaler">StandardScaler</option>
-                              <option value="MinMaxScaler">MinMaxScaler</option>
-                              <option value="RobustScaler">RobustScaler</option>
-                            </select>
                           ) : (
                             <select
-                              value={cfg.transform}
-                              onChange={(e) => updateColConfig(col.name, "transform", e.target.value)}
+                              value={cfg.mathTransform}
+                              onChange={(e) => updateTransform(col.name, "mathTransform", e.target.value)}
                               className="form-select-sm"
                             >
                               <option value="none">None (Raw)</option>
+                              <option value="log1p">Log1p (np.log1p)</option>
+                              <option value="yeo_johnson">Yeo-Johnson Power</option>
+                              <option value="sqrt">Square Root</option>
+                            </select>
+                          )}
+                        </td>
+                        <td>
+                          {isDropped || !isNumeric ? (
+                            <span className="text-muted text-xs">—</span>
+                          ) : (
+                            <select
+                              value={cfg.scaler}
+                              onChange={(e) => updateTransform(col.name, "scaler", e.target.value)}
+                              className="form-select-sm"
+                            >
+                              <option value="none">None (Unscaled)</option>
+                              <option value="StandardScaler">StandardScaler (z-score)</option>
+                              <option value="MinMaxScaler">MinMaxScaler [0, 1]</option>
+                              <option value="RobustScaler">RobustScaler (IQR)</option>
+                            </select>
+                          )}
+                        </td>
+                        <td>
+                          {isDropped || isNumeric ? (
+                            <span className="text-muted text-xs">—</span>
+                          ) : (
+                            <select
+                              value={cfg.encoder}
+                              onChange={(e) => updateTransform(col.name, "encoder", e.target.value)}
+                              className="form-select-sm"
+                            >
+                              <option value="none">None</option>
                               <option value="OneHotEncoder">OneHotEncoder</option>
                               <option value="OrdinalEncoder">OrdinalEncoder</option>
                             </select>
@@ -381,17 +530,18 @@ export default function Preprocessing() {
                       </tr>
                     );
                   })}
-              </tbody>
-            </table>
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Real-Time Recipe JSON Panel */}
+        {/* Real-Time Chained Recipe JSON Panel */}
         <div className="studio-card recipe-preview-card">
           <div className="flex justify-between items-center mb-3">
             <div className="flex items-center gap-2">
               <Code2 size={18} className="text-primary" />
-              <h3 className="font-bold text-sm">Pipeline Recipe JSON</h3>
+              <h3 className="font-bold text-sm">Chained Recipe JSON</h3>
             </div>
             <button 
               className="btn btn-secondary btn-sm flex items-center gap-1"
@@ -402,24 +552,34 @@ export default function Preprocessing() {
             </button>
           </div>
           <p className="text-xs text-muted mb-3">
-            This standardized specification is passed to <code>recipe_runner.py</code> to transform data deterministically.
+            Deterministic 2-stage configuration passed to <code>recipe_runner.py</code> and the Python Codegen engine.
           </p>
 
           <pre className="json-box">
             <code>{recipeJsonString}</code>
           </pre>
 
-          <div className="mt-4 flex justify-between items-center">
-            <span className="text-xs text-muted">
-              {recipe.steps.length} transformation steps configured
-            </span>
-            <Link 
-              to={`/models?datasetId=${dataset?.id || datasetId}`}
-              className="btn btn-primary btn-sm flex items-center gap-1.5"
-            >
-              <span>Save & Proceed to Models</span>
-              <ArrowRight size={14} />
-            </Link>
+          <div className="mt-4 flex flex-col gap-2">
+            <div className="flex justify-between text-xs text-muted mb-1">
+              <span>Stage 1 (Cleaning): <strong>{recipe.chains.stage_1_cleaning.length}</strong> steps</span>
+              <span>Stage 2 (Transforms): <strong>{recipe.chains.stage_2_transformation.length}</strong> steps</span>
+            </div>
+            <div className="flex justify-between items-center gap-2">
+              <Link 
+                to={`/pipeline?datasetId=${dataset?.id || datasetId}`}
+                className="btn btn-secondary btn-sm flex-1 flex items-center justify-center gap-1"
+              >
+                <Layers size={14} />
+                <span>Visual Studio</span>
+              </Link>
+              <Link 
+                to={`/models?datasetId=${dataset?.id || datasetId}`}
+                className="btn btn-primary btn-sm flex-1 flex items-center justify-center gap-1"
+              >
+                <span>Proceed to Models</span>
+                <ArrowRight size={14} />
+              </Link>
+            </div>
           </div>
         </div>
       </div>
