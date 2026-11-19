@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import init_db
-from .routers import datasets, pipelines, runs, predict
+from .routers import datasets, pipelines, runs, predict, export
 
 # Initialize DB tables
 init_db()
@@ -34,6 +34,8 @@ app.include_router(datasets.router)
 app.include_router(pipelines.router)
 app.include_router(runs.router)
 app.include_router(predict.router)
+app.include_router(export.router)
+
 
 
 @app.get("/")
