@@ -18,6 +18,7 @@ import {
 import api from "../api/client";
 import { getMockDatasetById, mockDatasets } from "../api/mockData";
 import PipelineCanvas from "../components/PipelineCanvas";
+import CodePreview from "../components/CodePreview";
 import { generatePythonScript } from "../services/codegen";
 
 export default function Pipeline() {
@@ -299,57 +300,15 @@ export default function Pipeline() {
         </div>
 
         {/* Right Col: Live Standalone Python Code Generator (7 cols) */}
-        <div className="lg:col-span-7 studio-card codegen-container">
-          <div className="codegen-header flex justify-between items-center pb-3 mb-3 border-b border-slate-200">
-            <div className="flex items-center gap-2">
-              <button
-                className={`codegen-tab-btn ${activeCodeTab === "python" ? "active" : ""}`}
-                onClick={() => setActiveCodeTab("python")}
-              >
-                <FileCode size={15} />
-                <span>train_pipeline.py</span>
-              </button>
-              <button
-                className={`codegen-tab-btn ${activeCodeTab === "json" ? "active" : ""}`}
-                onClick={() => setActiveCodeTab("json")}
-              >
-                <Code2 size={15} />
-                <span>pipeline_schema.json</span>
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button 
-                className="btn btn-secondary btn-sm flex items-center gap-1"
-                onClick={copyCode}
-                title="Copy script to clipboard"
-              >
-                {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-                <span>{copied ? "Copied!" : "Copy"}</span>
-              </button>
-              <button 
-                className="btn btn-primary btn-sm flex items-center gap-1"
-                onClick={downloadFile}
-                title="Download standalone file"
-              >
-                <Download size={14} />
-                <span>Download</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="codegen-editor-wrapper">
-            <pre className="codegen-code-box">
-              <code>
-                {activeCodeTab === "python" ? generatedCode : JSON.stringify(pipelineJson, null, 2)}
-              </code>
-            </pre>
-          </div>
-
-          <div className="codegen-footer mt-3 pt-3 border-t border-slate-200 flex justify-between items-center text-xs text-muted">
-            <span>✨ Pure standalone scikit-learn script with PCA & ONNX export</span>
-            <span className="font-mono">{generatedCode.split("\n").length} lines generated</span>
-          </div>
+        <div className="lg:col-span-7">
+          <CodePreview
+            code={generatedCode}
+            language="python"
+            filename="train_pipeline.py"
+            jsonFallback={pipelineJson}
+            title="Generated Standalone Pipeline"
+            subtitle="Pure standalone scikit-learn script with PCA & ONNX export"
+          />
         </div>
       </div>
     </div>

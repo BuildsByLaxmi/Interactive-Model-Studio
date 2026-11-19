@@ -10,7 +10,8 @@ import {
   CheckCircle2, 
   AlertCircle, 
   Loader2,
-  Sparkles
+  Sparkles,
+  Zap
 } from "lucide-react";
 import api from "../api/client";
 
@@ -80,11 +81,25 @@ export default function Navbar() {
             <span>Experiments</span>
           </NavLink>
           <NavLink 
+            to="/pipeline" 
+            className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+          >
+            <Workflow size={15} />
+            <span>Pipeline DAG</span>
+          </NavLink>
+          <NavLink 
             to="/dashboard" 
             className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
           >
             <BarChart3 size={15} />
             <span>Dashboard</span>
+          </NavLink>
+          <NavLink 
+            to="/edge-export" 
+            className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+          >
+            <Zap size={15} />
+            <span>Edge Deploy</span>
           </NavLink>
         </nav>
 

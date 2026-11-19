@@ -15,6 +15,7 @@ import {
 import api from "../api/client";
 import { getMockDatasetById } from "../api/mockData";
 import DiagnosticsPanel from "../components/DiagnosticsPanel";
+import DiagnosticsDetail from "../components/DiagnosticsDetail";
 
 export default function DatasetView() {
   const { id } = useParams();
@@ -117,8 +118,12 @@ export default function DatasetView() {
       </div>
 
       {/* Diagnostics Alert Engine */}
-      <div className="mb-8">
+      <div className="mb-8 space-y-4">
         <DiagnosticsPanel diagnostics={dataset.diagnostics || []} />
+        <DiagnosticsDetail 
+          dataset={dataset} 
+          diagnostics={dataset.diagnostics || []} 
+        />
       </div>
 
       {/* Schema Inspection Section */}
