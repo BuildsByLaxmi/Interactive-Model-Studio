@@ -1,93 +1,115 @@
 """
-Recipe Runner Module
-Executes an ordered list of preprocessing steps deterministically on a dataset.
-Prevents data leakage by fitting transformers exclusively on the training split.
+Recipe Runner Module (Person B)
+Executes ordered preprocessing steps deterministically on a dataset.
+Prevents data leakage by fitting transformers strictly on training data.
+Supports:
+- Data Cleaning (Imputation, Drop Columns)
+- Outlier & Noise Handling (IQR Clipping, Variance Threshold)
+- Transformations (Scaling, Encoding, Math/Power Transforms, Binning)
+- Dimension Reduction (PCA, Feature Selection)
+- Data Splitting
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import pandas as pd
 
 from ml_engine.preprocessing import (
     apply_split,
+    apply_train_val_test_split,
     apply_imputation,
+    apply_outlier_clipping,
     apply_scaling,
     apply_encoding,
-Sequential deterministic preprocessing recipe executor.
-Processes data transformations step-by-step without data leakage.
-"""
-
-import pandas as pd
-from typing import List, Dict, Any, Tuple
-from .preprocessing import (
-    apply_imputation,
-    apply_encoding,
-    apply_scaling,
-    apply_train_test_split,
+    apply_power_transform,
+    apply_log1p_transform,
+    apply_binning,
+    apply_pca_reduction,
+    apply_feature_selection,
+    apply_variance_threshold,
 )
 
 
 def run_recipe(
     df: pd.DataFrame,
-<<<<<<< HEAD
-    target_column: str,
-    recipe: List[Dict[str, Any]],
+    recipe: Union[List[Dict[str, Any]], Dict[str, Any]],
+    target_column: Optional[str] = None,
+    target_col: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, List[Dict[str, Any]]]:
     """
-    Executes a sequence of preprocessing steps on a raw DataFrame.
+    Executes a sequence of preprocessing steps on a raw DataFrame without data leakage.
 
-    Args:
-        df: Raw pandas DataFrame.
-        target_column: Name of the target variable.
-        recipe: List of step dictionaries matching docs/pipeline_schema.md.
+    Supports both list-based recipes:
+    [
+        {"step": "impute", "params": {"strategy": "mean", "columns": [...]}},
+        {"step": "outlier_clip", "params": {"threshold": 1.5, "columns": [...]}},
+        {"step": "scale", "params": {"method": "standard", "columns": [...]}},
+        {"step": "pca", "params": {"n_components": 2}},
+        {"step": "split", "params": {"test_size": 0.2, "random_state": 42}}
+    ]
 
-    Returns:
-        X_train (pd.DataFrame): Transformed training features.
-        X_test (pd.DataFrame): Transformed testing features.
-        y_train (pd.Series): Training target labels.
-        y_test (pd.Series): Testing target labels.
-        fitted_transformers (List[Dict]): List of fitted transformer objects and metadata.
+    And chained-dict recipes:
+    {
+        "chains": {
+            "stage_1_cleaning": [...],
+            "stage_2_transformation": [...]
+        }
+    }
     """
-    if target_column not in df.columns:
-        raise ValueError(f"Target column '{target_column}' is not present in the dataset.")
+    resolved_target = target_column or target_col
+    if not resolved_target:
+        raise ValueError("Target column must be specified.")
 
-    # 1. Identify split configuration (default to 80/20 if not explicitly defined)
-    split_step = None
+    if resolved_target not in df.columns:
+        raise ValueError(f"Target column '{resolved_target}' not found in DataFrame.")
+
+    # Flatten chained recipe if necessary
+    flat_steps = []
+    if isinstance(recipe, dict) and "chains" in recipe:
+        for chain_key in ["stage_1_cleaning", "stage_2_transformation", "stage_3_reduction"]:
+            flat_steps.extend(recipe["chains"].get(chain_key, []))
+    elif isinstance(recipe, list):
+        flat_steps = recipe
+    else:
+        flat_steps = []
+
+    # 1. Split identification (default 80/20)
+    split_params = {"test_size": 0.2, "random_state": 42, "stratify": False}
     feature_steps = []
 
-    for step_cfg in recipe:
-        if step_cfg.get("step") == "split":
-            split_step = step_cfg
+    for step_cfg in flat_steps:
+        step_name = step_cfg.get("step", "").lower()
+        if step_name == "split":
+            split_params.update(step_cfg.get("params", step_cfg))
         else:
             feature_steps.append(step_cfg)
 
-    split_params = split_step.get("params", {}) if split_step else {}
-    test_size = float(split_params.get("test_size", 0.2))
-    random_state = int(split_params.get("random_state", 42))
-    stratify = bool(split_params.get("stratify", False))
-    shuffle = bool(split_params.get("shuffle", True))
-
-    # Apply initial train/test split to prevent leakage
+    # 2. Initial Data Split to prevent leakage across all steps
     X_train, X_test, y_train, y_test = apply_split(
         df=df,
-        target_column=target_column,
-        test_size=test_size,
-        random_state=random_state,
-        stratify=stratify,
-        shuffle=shuffle,
+        target_column=resolved_target,
+        test_size=float(split_params.get("test_size", 0.2)),
+        random_state=int(split_params.get("random_state", 42)),
+        stratify=bool(split_params.get("stratify", False)),
     )
 
     fitted_transformers: List[Dict[str, Any]] = []
 
-    # 2. Sequentially apply each feature preprocessing step
+    # 3. Sequentially apply pipeline steps
     for step_cfg in feature_steps:
         step_name = step_cfg.get("step", "").lower()
-        params = step_cfg.get("params", {})
+        params = step_cfg.get("params", step_cfg)
         columns = params.get("columns", [])
 
-        if not columns:
-            continue
+        # Drop columns
+        if step_name in ["drop", "drop_columns"]:
+            cols_to_drop = [c for c in columns if c in X_train.columns]
+            if cols_to_drop:
+                X_train = X_train.drop(columns=cols_to_drop)
+                X_test = X_test.drop(columns=cols_to_drop)
+                fitted_transformers.append({"step": "drop", "columns": cols_to_drop})
 
-        if step_name == "impute":
+        # Impute missing values
+        elif step_name == "impute":
             strategy = params.get("strategy", "mean")
             fill_value = params.get("fill_value", None)
             X_train, X_test, transformer = apply_imputation(
@@ -100,19 +122,20 @@ def run_recipe(
                 "transformer": transformer,
             })
 
-        elif step_name == "encode":
-            method = params.get("method", "onehot")
-            drop = params.get("drop", "first")
-            X_train, X_test, transformer = apply_encoding(
-                X_train, X_test, columns=columns, method=method, drop=drop
+        # Outlier clipping & winsorization
+        elif step_name in ["outlier_clip", "iqr_outlier_clipping", "outliers"]:
+            method = params.get("method", "iqr")
+            threshold = float(params.get("threshold", 1.5))
+            X_train, X_test, bounds = apply_outlier_clipping(
+                X_train, X_test, columns=columns, method=method, threshold=threshold
             )
             fitted_transformers.append({
-                "step": "encode",
+                "step": "outlier_clip",
                 "columns": columns,
-                "method": method,
-                "transformer": transformer,
+                "bounds": bounds,
             })
 
+        # Scaling
         elif step_name == "scale":
             method = params.get("method", "standard")
             X_train, X_test, transformer = apply_scaling(
@@ -125,10 +148,82 @@ def run_recipe(
                 "transformer": transformer,
             })
 
-        else:
-            raise ValueError(f"Unknown or unsupported preprocessing step: '{step_name}'")
+        # Encoding
+        elif step_name == "encode":
+            method = params.get("method", "onehot")
+            drop = params.get("drop", None)
+            X_train, X_test, transformer = apply_encoding(
+                X_train, X_test, columns=columns, method=method, drop=drop
+            )
+            fitted_transformers.append({
+                "step": "encode",
+                "columns": columns,
+                "method": method,
+                "transformer": transformer,
+            })
 
-    # Ensure all columns have string names and numerical indices are reset
+        # Power Transforms
+        elif step_name in ["power_transform", "yeo_johnson", "math_transform"]:
+            method = params.get("method", "yeo-johnson")
+            if method == "log1p":
+                X_train, X_test, transformer = apply_log1p_transform(X_train, X_test, columns=columns)
+            else:
+                X_train, X_test, transformer = apply_power_transform(X_train, X_test, columns=columns, method="yeo-johnson")
+            fitted_transformers.append({
+                "step": "power_transform",
+                "columns": columns,
+                "transformer": transformer,
+            })
+
+        # Binning / Discretization
+        elif step_name in ["binning", "discretize"]:
+            n_bins = int(params.get("n_bins", 5))
+            strategy = params.get("strategy", "quantile")
+            X_train, X_test, transformer = apply_binning(
+                X_train, X_test, columns=columns, n_bins=n_bins, strategy=strategy
+            )
+            fitted_transformers.append({
+                "step": "binning",
+                "columns": columns,
+                "transformer": transformer,
+            })
+
+        # Dimension Reduction: PCA
+        elif step_name in ["pca", "dimension_reduction"]:
+            n_components = int(params.get("n_components", 2))
+            X_train, X_test, transformer = apply_pca_reduction(
+                X_train, X_test, n_components=n_components
+            )
+            fitted_transformers.append({
+                "step": "pca",
+                "n_components": n_components,
+                "transformer": transformer,
+            })
+
+        # Feature Selection
+        elif step_name in ["feature_selection", "select_k_best"]:
+            k = int(params.get("k", 5))
+            X_train, X_test, transformer = apply_feature_selection(
+                X_train, X_test, y_train, k=k
+            )
+            fitted_transformers.append({
+                "step": "feature_selection",
+                "k": k,
+                "transformer": transformer,
+            })
+
+        # Variance Threshold (Noise Removal)
+        elif step_name == "variance_threshold":
+            thresh = float(params.get("threshold", 0.0))
+            X_train, X_test, transformer = apply_variance_threshold(
+                X_train, X_test, threshold=thresh
+            )
+            fitted_transformers.append({
+                "step": "variance_threshold",
+                "transformer": transformer,
+            })
+
+    # Convert column labels to string and reset indices
     X_train.columns = [str(c) for c in X_train.columns]
     X_test.columns = [str(c) for c in X_test.columns]
 
@@ -139,65 +234,3 @@ def run_recipe(
         y_test.reset_index(drop=True),
         fitted_transformers,
     )
-=======
-    recipe: List[Dict[str, Any]],
-    target_col: str
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, List[Any]]:
-    """
-    Executes a list of preprocessing recipe steps on input DataFrame.
-
-    Example recipe format:
-    [
-        {"step": "impute", "columns": ["age"], "params": {"strategy": "mean"}},
-        {"step": "encode", "columns": ["gender"], "params": {"method": "onehot"}},
-        {"step": "scale", "columns": ["age"], "params": {"method": "standard"}},
-        {"step": "split", "params": {"test_size": 0.2, "random_state": 42}}
-    ]
-    """
-    processed_df = df.copy()
-    fitted_transformers = []
-    split_params = {"test_size": 0.2, "random_state": 42, "stratify": False}
-
-    for step_config in recipe:
-        step_type = step_config.get("step")
-        cols = step_config.get("columns", [])
-        params = step_config.get("params", {})
-
-        # Exclude target column from transformations if included accidentally
-        cols = [c for c in cols if c != target_col]
-
-        if step_type == "impute":
-            strategy = params.get("strategy", "mean")
-            fill_val = params.get("fill_value", None)
-            processed_df, imputer = apply_imputation(processed_df, cols, strategy, fill_val)
-            if imputer:
-                fitted_transformers.append({"step": "impute", "transformer": imputer, "columns": cols})
-
-        elif step_type == "encode":
-            method = params.get("method", "onehot")
-            processed_df, encoder = apply_encoding(processed_df, cols, method)
-            if encoder:
-                fitted_transformers.append({"step": "encode", "transformer": encoder, "columns": cols})
-
-        elif step_type == "scale":
-            method = params.get("method", "standard")
-            processed_df, scaler = apply_scaling(processed_df, cols, method)
-            if scaler:
-                fitted_transformers.append({"step": "scale", "transformer": scaler, "columns": cols})
-
-        elif step_type == "split":
-            split_params.update(params)
-
-        else:
-            raise ValueError(f"Unknown recipe step type: '{step_type}'")
-
-    X_train, X_test, y_train, y_test = apply_train_test_split(
-        processed_df,
-        target_col=target_col,
-        test_size=split_params.get("test_size", 0.2),
-        random_state=split_params.get("random_state", 42),
-        stratify=split_params.get("stratify", False)
-    )
-
-    return X_train, X_test, y_train, y_test, fitted_transformers
->>>>>>> origin/main
