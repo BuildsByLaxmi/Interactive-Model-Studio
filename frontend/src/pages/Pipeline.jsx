@@ -10,10 +10,10 @@ import {
   ArrowRight, 
   Layers, 
   FileCode, 
-  Settings2,
-  Sparkles,
-  ExternalLink,
-  RefreshCw
+  TrendingDown,
+  Split,
+  Cpu,
+  Sparkles
 } from "lucide-react";
 import api from "../api/client";
 import { getMockDatasetById, mockDatasets } from "../api/mockData";
@@ -27,7 +27,7 @@ export default function Pipeline() {
 
   const [dataset, setDataset] = useState(null);
   const [selectedModel, setSelectedModel] = useState("RandomForestClassifier");
-  const [activeCodeTab, setActiveCodeTab] = useState("python"); // "python" | "json"
+  const [activeCodeTab, setActiveCodeTab] = useState("python"); // "python" | "json" | "onnx"
   const [copied, setCopied] = useState(false);
 
   // Hyperparameters
@@ -35,6 +35,23 @@ export default function Pipeline() {
     n_estimators: 100,
     max_depth: 8,
     random_state: 42
+  });
+
+  const [reductionConfig, setReductionConfig] = useState({
+    enabled: true,
+    method: "pca",
+    n_components: 2,
+    k_best: 5,
+    variance_threshold: 0.01,
+  });
+
+  const [splitConfig, setSplitConfig] = useState({
+    train: 70,
+    val: 15,
+    test: 15,
+    stratify: true,
+    kfold: false,
+    randomState: 42,
   });
 
   useEffect(() => {
@@ -48,7 +65,7 @@ export default function Pipeline() {
       });
   }, [datasetId]);
 
-  // Default cleaning configuration for the current dataset
+  // Default cleaning configuration
   const cleaningConfigs = {
     customerID: { action: "drop", imputer: "none", handleOutliers: false },
     TotalCharges: { action: "keep", imputer: "median", handleOutliers: true },
@@ -70,34 +87,50 @@ export default function Pipeline() {
   const generatedCode = generatePythonScript({
     datasetName: dataset ? `${dataset.id}.csv` : "dataset.csv",
     targetColumn: dataset?.target_column || "churn",
-    testSize: 0.2,
-    randomState: 42,
+    splitConfig,
     cleaningConfigs,
     transformConfigs,
+    reductionConfig,
     modelType: selectedModel,
-    hyperparameters: hyperparams
+    hyperparameters: hyperparams,
+    exportOnnx: true,
   });
 
   const pipelineJson = {
-    name: "chained_automl_pipeline",
+    pipeline_name: "end_to_end_studio_pipeline",
     dataset: dataset?.id || datasetId,
     target: dataset?.target_column || "churn",
     chains: {
-      cleaning: [
-        { step: "drop", columns: ["customerID"] },
+      stage_1_cleaning: [
+        { step: "drop_duplicates" },
+        { step: "drop_columns", columns: ["customerID"] },
         { step: "impute", strategy: "median", columns: ["TotalCharges"] },
-        { step: "outlier_clipping", threshold: 1.5, columns: ["TotalCharges"] }
+        { step: "outlier_clip", method: "iqr", threshold: 1.5, columns: ["TotalCharges"] }
       ],
-      transformations: [
-        { step: "log_transform", columns: ["TotalCharges"] },
+      stage_2_transformation: [
+        { step: "math_transform", method: "log1p", columns: ["TotalCharges"] },
         { step: "scale", method: "StandardScaler", columns: ["TotalCharges", "MonthlyCharges"] },
         { step: "scale", method: "MinMaxScaler", columns: ["tenure"] },
         { step: "encode", method: "OneHotEncoder", columns: ["Contract", "PaymentMethod", "InternetService"] }
-      ]
+      ],
+      stage_3_reduction: [
+        { step: "pca", n_components: reductionConfig.n_components }
+      ],
+      stage_4_splitting: {
+        train_ratio: 0.70,
+        val_ratio: 0.15,
+        test_ratio: 0.15,
+        stratify: true,
+        random_state: 42
+      }
     },
     estimator: {
       algorithm: selectedModel,
       hyperparameters: hyperparams
+    },
+    export: {
+      onnx_enabled: true,
+      target_runtime: "onnxruntime-web"
     }
   };
 
@@ -136,7 +169,7 @@ export default function Pipeline() {
         <div>
           <h1 className="page-title">Visual Pipeline Studio & Python Codegen</h1>
           <p className="page-subtitle">
-            Construct reproducible end-to-end ML pipelines with chained data cleaning and feature transformations. Export as standalone, executable Python scripts.
+            Complete end-to-end DAG: Data Cleaning ➔ Transformations ➔ Dimension Reduction (PCA) ➔ Splitting ➔ Estimator. Export as standalone Python scripts & ONNX edge artifacts.
           </p>
         </div>
 
@@ -146,7 +179,7 @@ export default function Pipeline() {
             className="btn btn-secondary flex items-center gap-1.5"
           >
             <Sliders size={15} />
-            <span>Tune Chained Recipes</span>
+            <span>Configure All 4 Stages</span>
           </Link>
           <button 
             className="btn btn-primary flex items-center gap-1.5"
@@ -164,6 +197,8 @@ export default function Pipeline() {
           dataset={dataset}
           cleaningCounts={{ dropped: 1, imputed: 1, outliers: 1 }}
           transformCounts={{ math: 1, scaled: 3, encoded: 3 }}
+          reductionConfig={reductionConfig}
+          splitConfig={splitConfig}
           selectedModel={selectedModel}
           onSelectModel={setSelectedModel}
           onOpenStep={(step) => navigate(`/preprocessing?datasetId=${dataset?.id || datasetId}`)}
@@ -178,28 +213,22 @@ export default function Pipeline() {
           <div className="studio-card">
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs font-bold uppercase tracking-wider text-primary">
-                Stage 1 • Cleaning Chain
+                Stage 1 • Cleaning & Outlier Handling
               </span>
-              <span className="text-xs text-muted">Executed on Raw Data</span>
+              <span className="text-xs text-muted">Quality & Noise</span>
             </div>
             <ul className="pipeline-blueprint-list">
               <li>
                 <div className="blueprint-bullet bg-rose-500"></div>
-                <div>
-                  <strong>Drop Features:</strong> <code>customerID</code> (Proxy ID / High Unique)
-                </div>
+                <div><strong>Drop Redundant Columns:</strong> <code>customerID</code> (ID proxy)</div>
               </li>
               <li>
                 <div className="blueprint-bullet bg-blue-500"></div>
-                <div>
-                  <strong>Median Imputation:</strong> <code>TotalCharges</code> (Handles nulls)
-                </div>
+                <div><strong>Median Imputation:</strong> <code>TotalCharges</code> (Null values)</div>
               </li>
               <li>
                 <div className="blueprint-bullet bg-amber-500"></div>
-                <div>
-                  <strong>Outlier IQR Clipping:</strong> <code>TotalCharges</code> (Capped at 1.5× IQR)
-                </div>
+                <div><strong>IQR 1.5× Winsorization:</strong> <code>TotalCharges</code> (Outlier clipping)</div>
               </li>
             </ul>
           </div>
@@ -208,28 +237,42 @@ export default function Pipeline() {
           <div className="studio-card">
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs font-bold uppercase tracking-wider text-accent">
-                Stage 2 • Feature Transform Chain
+                Stage 2 • Feature Transformations
               </span>
-              <span className="text-xs text-muted">Feature Engineering</span>
+              <span className="text-xs text-muted">Feature Scaling</span>
             </div>
             <ul className="pipeline-blueprint-list">
               <li>
                 <div className="blueprint-bullet bg-purple-500"></div>
-                <div>
-                  <strong>Log1p Math Transform:</strong> <code>TotalCharges</code> (Fixes skewness)
-                </div>
+                <div><strong>Log1p Math Transform:</strong> <code>TotalCharges</code> (Skewness fix)</div>
               </li>
               <li>
                 <div className="blueprint-bullet bg-indigo-500"></div>
-                <div>
-                  <strong>StandardScaler:</strong> <code>TotalCharges</code>, <code>MonthlyCharges</code>
-                </div>
+                <div><strong>StandardScaler:</strong> <code>TotalCharges</code>, <code>MonthlyCharges</code></div>
               </li>
               <li>
                 <div className="blueprint-bullet bg-cyan-500"></div>
-                <div>
-                  <strong>OneHotEncoder:</strong> <code>Contract</code>, <code>PaymentMethod</code>, <code>InternetService</code>
-                </div>
+                <div><strong>OneHotEncoder:</strong> <code>Contract</code>, <code>PaymentMethod</code>, <code>InternetService</code></div>
+              </li>
+            </ul>
+          </div>
+
+          {/* Stage 3 & 4 Summary Card */}
+          <div className="studio-card">
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-rose-600">
+                Stage 3 & 4 • Reduction & Splitting
+              </span>
+              <span className="text-xs text-muted">Orthogonal Projection</span>
+            </div>
+            <ul className="pipeline-blueprint-list">
+              <li>
+                <div className="blueprint-bullet bg-rose-600"></div>
+                <div><strong>PCA Dimension Reduction:</strong> Compress to <code>{reductionConfig.n_components} components</code></div>
+              </li>
+              <li>
+                <div className="blueprint-bullet bg-teal-600"></div>
+                <div><strong>Stratified Split:</strong> 70% Train, 15% Validation, 15% Test</div>
               </li>
             </ul>
           </div>
@@ -238,7 +281,7 @@ export default function Pipeline() {
           <div className="studio-card">
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs font-bold uppercase tracking-wider text-emerald-600">
-                Stage 3 • Estimator Hyperparameters
+                Stage 5 • Model Estimator
               </span>
               <span className="text-xs font-semibold text-emerald-700">{selectedModel}</span>
             </div>
@@ -304,7 +347,7 @@ export default function Pipeline() {
           </div>
 
           <div className="codegen-footer mt-3 pt-3 border-t border-slate-200 flex justify-between items-center text-xs text-muted">
-            <span>✨ Pure standalone scikit-learn script — no framework lock-in</span>
+            <span>✨ Pure standalone scikit-learn script with PCA & ONNX export</span>
             <span className="font-mono">{generatedCode.split("\n").length} lines generated</span>
           </div>
         </div>
